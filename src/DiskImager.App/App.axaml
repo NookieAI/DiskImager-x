@@ -2,6 +2,15 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              x:Class="DiskImagerX.App"
              RequestedThemeVariant="Dark">
+  <Application.Resources>
+    <!-- Theme the Fluent accent (checkbox ticks, combo selection, focus) to DiskImager cyan -->
+    <Color x:Key="SystemAccentColor">#00C6F5</Color>
+    <Color x:Key="SystemAccentColorLight1">#3FE0FF</Color>
+    <Color x:Key="SystemAccentColorLight2">#6BEAFF</Color>
+    <Color x:Key="SystemAccentColorDark1">#00A6D0</Color>
+    <Color x:Key="SystemAccentColorDark2">#0088AC</Color>
+    <FontFamily x:Key="Mono">Cascadia Code,Cascadia Mono,SF Mono,Menlo,DejaVu Sans Mono,Consolas,monospace</FontFamily>
+  </Application.Resources>
   <Application.Styles>
     <FluentTheme />
   </Application.Styles>

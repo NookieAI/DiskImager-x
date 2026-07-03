@@ -2,7 +2,9 @@
 bin/
 obj/
 publish/
+pub/
 out/
+release/
 
 # IDE / OS
 .vs/

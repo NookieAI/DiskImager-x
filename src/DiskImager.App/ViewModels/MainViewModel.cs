@@ -26,6 +26,7 @@ public partial class MainViewModel : ObservableObject
         Platform = _backend.PlatformName;
         IsElevated = _backend.IsElevated();
         ElevationText = IsElevated ? "elevated" : _backend.ElevationHint;
+        ElevationShort = IsElevated ? "admin" : "not elevated";
         var v = Assembly.GetExecutingAssembly().GetName().Version;
         VersionText = v is null ? "" : $"v{v.Major}.{v.Minor}";
         _ = RefreshAsync();
@@ -36,6 +37,7 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _versionText = "";
     [ObservableProperty] private bool _isElevated;
     [ObservableProperty] private string _elevationText = "";
+    [ObservableProperty] private string _elevationShort = "";
 
     // ── mode (0 backup · 1 restore · 2 verify · 3 format · 4 mount) ────────────
     [ObservableProperty]

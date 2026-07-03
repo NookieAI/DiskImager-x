@@ -30,3 +30,14 @@ public sealed class Not : IValueConverter
     public object Convert(object? v, Type t, object? p, CultureInfo c) => v is bool b && !b;
     public object ConvertBack(object? v, Type t, object? p, CultureInfo c) => v is bool b && !b;
 }
+
+/// <summary>bool → one of two brushes. Used for the elevation status (ok green / warn amber).</summary>
+public sealed class BoolBrush : IValueConverter
+{
+    public static readonly BoolBrush Status = new() { True = new SolidColorBrush(Color.Parse("#1FD17A")), False = new SolidColorBrush(Color.Parse("#FF9838")) };
+    public static readonly BoolBrush StatusFaint = new() { True = new SolidColorBrush(Color.Parse("#132A20")), False = new SolidColorBrush(Color.Parse("#2A2010")) };
+    public IBrush True { get; init; } = Brushes.Transparent;
+    public IBrush False { get; init; } = Brushes.Transparent;
+    public object Convert(object? v, Type t, object? p, CultureInfo c) => v is true ? True : False;
+    public object ConvertBack(object? v, Type t, object? p, CultureInfo c) => throw new NotSupportedException();
+}

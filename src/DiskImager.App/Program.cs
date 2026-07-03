@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Media.Imaging;
 using Avalonia.Threading;
@@ -34,11 +35,15 @@ internal static class Program
             .UseSkia()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions { UseHeadlessDrawing = false })
             .SetupWithoutStarting();
-        var win = new MainWindow { Width = 600, Height = 660 };
-        if (win.DataContext is ViewModels.MainViewModel vm) vm.Mode = mode;
+        var win = new MainWindow { Width = 620, Height = 676 };
         win.Show();
         Dispatcher.UIThread.RunJobs();
+        for (int i = 0; i < 6; i++) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(40); }
+        // switch mode on the live, shown window, then let the fade settle
+        if (win.DataContext is ViewModels.MainViewModel vm) vm.Mode = mode;
         for (int i = 0; i < 12; i++) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(40); }
+        if (win.FindControl<Avalonia.Controls.Border>("Card") is { } card) card.Opacity = 1;
+        for (int i = 0; i < 4; i++) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(40); }
         var frame = win.CaptureRenderedFrame();
         frame?.Save(outPath);
         Console.WriteLine(frame is null ? "no frame" : "saved " + outPath);
