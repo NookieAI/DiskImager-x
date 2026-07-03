@@ -16,6 +16,16 @@
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
       <Setter Property="FontSize" Value="12.5"/>
+      <!-- glide the selection highlight instead of snapping -->
+      <Setter Property="Transitions">
+        <Transitions>
+          <BrushTransition Property="Background" Duration="0:0:0.25" Easing="CubicEaseOut"/>
+          <BrushTransition Property="Foreground" Duration="0:0:0.25" Easing="CubicEaseOut"/>
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Button.tab:pointerover /template/ ContentPresenter">
+      <Setter Property="Background" Value="#12253C"/>
     </Style>
     <Style Selector="Button.action">
       <Setter Property="Height" Value="46"/>
@@ -24,6 +34,14 @@
       <Setter Property="FontSize" Value="14"/>
       <Setter Property="Foreground" Value="White"/>
       <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="Transitions">
+        <Transitions>
+          <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.12" Easing="CubicEaseOut"/>
+        </Transitions>
+      </Setter>
+    </Style>
+    <Style Selector="Button.action:pointerover">
+      <Setter Property="RenderTransform" Value="scale(1.015)"/>
     </Style>
     <Style Selector="TextBlock.h">
       <Setter Property="Foreground" Value="#6280A0"/>
@@ -83,7 +101,12 @@
     </Border>
 
     <!-- CARD -->
-    <Border Grid.Row="2" CornerRadius="12" Background="#0C1626" BorderBrush="#1E3A5F" BorderThickness="1" Padding="18">
+    <Border x:Name="Card" Grid.Row="2" CornerRadius="12" Background="#0C1626" BorderBrush="#1E3A5F" BorderThickness="1" Padding="18">
+      <Border.Transitions>
+        <Transitions>
+          <DoubleTransition Property="Opacity" Duration="0:0:0.26" Easing="CubicEaseOut"/>
+        </Transitions>
+      </Border.Transitions>
       <StackPanel Spacing="12">
 
         <StackPanel IsVisible="{Binding NeedsDisk}">
