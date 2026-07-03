@@ -1,0 +1,158 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:DiskImagerX"
+        xmlns:vm="clr-namespace:DiskImagerX.ViewModels"
+        x:Class="DiskImagerX.MainWindow"
+        Width="600" Height="660" MinWidth="560" MinHeight="600"
+        Title="DiskImager" Background="#070C16">
+
+  <Window.Styles>
+    <Style Selector="Button.tab">
+      <Setter Property="Background" Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0"/>
+      <Setter Property="CornerRadius" Value="9"/>
+      <Setter Property="Padding" Value="10,7"/>
+      <Setter Property="HorizontalAlignment" Value="Stretch"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="12.5"/>
+    </Style>
+    <Style Selector="Button.action">
+      <Setter Property="Height" Value="46"/>
+      <Setter Property="CornerRadius" Value="9"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Foreground" Value="White"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+    </Style>
+    <Style Selector="TextBlock.h">
+      <Setter Property="Foreground" Value="#6280A0"/>
+      <Setter Property="FontSize" Value="11"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+    <Style Selector="CheckBox">
+      <Setter Property="Foreground" Value="#DCEBFF"/>
+    </Style>
+  </Window.Styles>
+
+  <Grid RowDefinitions="Auto,Auto,*,Auto,Auto" Margin="24,18,24,18">
+
+    <!-- HEADER -->
+    <Grid Grid.Row="0" ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,14">
+      <Ellipse Grid.Column="0" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,12,0">
+        <Ellipse.Fill><LinearGradientBrush StartPoint="0%,0%" EndPoint="100%,100%">
+          <GradientStop Color="#00D2FF" Offset="0"/><GradientStop Color="#7632FF" Offset="1"/>
+        </LinearGradientBrush></Ellipse.Fill>
+      </Ellipse>
+      <StackPanel Grid.Column="1" VerticalAlignment="Center">
+        <StackPanel Orientation="Horizontal" Spacing="8">
+          <TextBlock Text="DiskImager" Foreground="#DCEBFF" FontSize="22" FontWeight="SemiBold"/>
+          <TextBlock Text="{Binding VersionText}" Foreground="#6280A0" FontSize="12" VerticalAlignment="Bottom" Margin="0,0,0,4"/>
+        </StackPanel>
+        <TextBlock Text="PHYSICAL DISK IMAGING · IMG ISO GZ ZIP VHD" Foreground="#3E5A78" FontSize="9.5"/>
+      </StackPanel>
+      <Border Grid.Column="2" VerticalAlignment="Center" CornerRadius="9" Padding="9,3"
+              Background="#10241A" BorderBrush="{Binding IsElevated, Converter={x:Static local:TabBrush.Accent}, ConverterParameter=1}">
+        <StackPanel Orientation="Horizontal" Spacing="6">
+          <TextBlock Text="{Binding Platform}" Foreground="#1FD17A" FontSize="10.5" FontWeight="SemiBold"/>
+          <TextBlock Text="{Binding ElevationText}" Foreground="#6280A0" FontSize="10.5"/>
+        </StackPanel>
+      </Border>
+    </Grid>
+
+    <!-- MODE TABS -->
+    <Border Grid.Row="1" CornerRadius="11" Background="#0C1626" BorderBrush="#1E3A5F" BorderThickness="1" Padding="4" Margin="0,0,0,14">
+      <Grid ColumnDefinitions="*,*,*,*,*">
+        <Button Grid.Column="0" Classes="tab" Command="{Binding SetModeCommand}" CommandParameter="0" Content="BACKUP"
+                Background="{Binding Mode, Converter={x:Static local:TabBrush.Bg}, ConverterParameter=0}"
+                Foreground="{Binding Mode, Converter={x:Static local:TabBrush.Fg}, ConverterParameter=0}"/>
+        <Button Grid.Column="1" Classes="tab" Command="{Binding SetModeCommand}" CommandParameter="1" Content="RESTORE"
+                Background="{Binding Mode, Converter={x:Static local:TabBrush.Bg}, ConverterParameter=1}"
+                Foreground="{Binding Mode, Converter={x:Static local:TabBrush.Fg}, ConverterParameter=1}"/>
+        <Button Grid.Column="2" Classes="tab" Command="{Binding SetModeCommand}" CommandParameter="2" Content="VERIFY"
+                Background="{Binding Mode, Converter={x:Static local:TabBrush.Bg}, ConverterParameter=2}"
+                Foreground="{Binding Mode, Converter={x:Static local:TabBrush.Fg}, ConverterParameter=2}"/>
+        <Button Grid.Column="3" Classes="tab" Command="{Binding SetModeCommand}" CommandParameter="3" Content="FORMAT"
+                Background="{Binding Mode, Converter={x:Static local:TabBrush.Bg}, ConverterParameter=3}"
+                Foreground="{Binding Mode, Converter={x:Static local:TabBrush.Fg}, ConverterParameter=3}"/>
+        <Button Grid.Column="4" Classes="tab" Command="{Binding SetModeCommand}" CommandParameter="4" Content="MOUNT"
+                Background="{Binding Mode, Converter={x:Static local:TabBrush.Bg}, ConverterParameter=4}"
+                Foreground="{Binding Mode, Converter={x:Static local:TabBrush.Fg}, ConverterParameter=4}"/>
+      </Grid>
+    </Border>
+
+    <!-- CARD -->
+    <Border Grid.Row="2" CornerRadius="12" Background="#0C1626" BorderBrush="#1E3A5F" BorderThickness="1" Padding="18">
+      <StackPanel Spacing="12">
+
+        <StackPanel IsVisible="{Binding NeedsDisk}">
+          <TextBlock Classes="h" Text="{Binding SectionTitle}"/>
+          <Grid ColumnDefinitions="*,Auto">
+            <ComboBox Grid.Column="0" ItemsSource="{Binding Disks}" SelectedItem="{Binding SelectedDisk}"
+                      HorizontalAlignment="Stretch" Background="#10203A" Foreground="#DCEBFF"
+                      IsEnabled="{Binding IsRunning, Converter={x:Static local:Not.Instance}}"/>
+            <Button Grid.Column="1" Content="↻" Command="{Binding RefreshCommand}" Width="40" FontSize="16" Margin="8,0,0,0"
+                    IsEnabled="{Binding IsRunning, Converter={x:Static local:Not.Instance}}"/>
+          </Grid>
+          <TextBlock Text="{Binding DiskInfoText}" Foreground="#6280A0" FontFamily="Consolas,monospace" FontSize="11" Margin="2,6,0,0"/>
+        </StackPanel>
+
+        <StackPanel IsVisible="{Binding NeedsFile}">
+          <TextBlock Classes="h" Text="FILE"/>
+          <Grid ColumnDefinitions="*,Auto">
+            <TextBox Grid.Column="0" Text="{Binding Path}" Watermark="e.g. /path/to/image.img  or  backup.img.gz"
+                     Background="#10203A" Foreground="#DCEBFF" BorderBrush="#1E3A5F"/>
+            <Button Grid.Column="1" Content="Browse" Command="{Binding BrowseCommand}" Padding="14,0" Margin="8,0,0,0"/>
+          </Grid>
+          <TextBlock Text="{Binding FormatText}" Foreground="#00D2FF" FontFamily="Consolas,monospace" FontSize="11" Margin="2,6,0,0"/>
+        </StackPanel>
+
+        <!-- options per mode -->
+        <StackPanel Orientation="Horizontal" Spacing="24" IsVisible="{Binding IsBackup}">
+          <CheckBox IsChecked="{Binding Gzip}" Content="Compress (.gz)"/>
+          <CheckBox IsChecked="{Binding Sha256}" Content="SHA-256 checksum"/>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Spacing="24" IsVisible="{Binding IsRestore}">
+          <CheckBox IsChecked="{Binding SmartRestore}" Content="Smart restore (skip zeros)"/>
+          <CheckBox IsChecked="{Binding VerifyAfter}" Content="Verify after write"/>
+        </StackPanel>
+        <StackPanel IsVisible="{Binding IsVerify}">
+          <CheckBox IsChecked="{Binding SmartRestore}" Content="Skip zero regions (smart image)"/>
+        </StackPanel>
+        <StackPanel IsVisible="{Binding IsFormat}" Spacing="12">
+          <StackPanel>
+            <TextBlock Classes="h" Text="VOLUME LABEL  (optional, max 11)"/>
+            <TextBox Text="{Binding VolumeLabel}" MaxLength="11" Watermark="NO NAME"
+                     Background="#10203A" Foreground="#DCEBFF" BorderBrush="#1E3A5F"/>
+          </StackPanel>
+          <CheckBox IsChecked="{Binding QuickFormat}" Content="Quick format (structures only — off = zero the whole disk)"/>
+          <Border CornerRadius="6" Background="#1A140A" BorderBrush="#FF9838" BorderThickness="1" Padding="10,7">
+            <TextBlock Text="⚠  THIS ERASES THE SELECTED DISK — CANNOT BE UNDONE" Foreground="#FF9838" FontSize="11" FontWeight="SemiBold"/>
+          </Border>
+        </StackPanel>
+      </StackPanel>
+    </Border>
+
+    <!-- PROGRESS -->
+    <StackPanel Grid.Row="3" Margin="0,14,0,10" Spacing="6">
+      <Grid ColumnDefinitions="*,Auto">
+        <ProgressBar Grid.Column="0" Height="26" Minimum="0" Maximum="100" Value="{Binding ProgressPercent}"
+                     IsIndeterminate="{Binding IsIndeterminate}" Foreground="#00D2FF" Background="#10203A" CornerRadius="6"/>
+        <TextBlock Grid.Column="0" Text="{Binding PercentText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                   Foreground="#DCEBFF" FontFamily="Consolas,monospace" FontWeight="Bold"/>
+        <TextBlock Grid.Column="1" Text="{Binding SpeedText}" Margin="12,0,0,0" VerticalAlignment="Center"
+                   Foreground="#00D2FF" FontFamily="Consolas,monospace" FontWeight="Bold"/>
+      </Grid>
+      <TextBlock Text="{Binding StatusText}" Foreground="#6280A0" FontSize="12"/>
+    </StackPanel>
+
+    <!-- ACTIONS -->
+    <Grid Grid.Row="4" ColumnDefinitions="*,Auto">
+      <Button Grid.Column="0" Classes="action" Content="{Binding ActionLabel}" Command="{Binding StartCommand}"
+              Background="#0058AC" IsEnabled="{Binding IsRunning, Converter={x:Static local:Not.Instance}}"/>
+      <Button Grid.Column="1" Classes="action" Content="Cancel" Command="{Binding CancelCommand}" Width="130" Margin="10,0,0,0"
+              Background="#28101699" IsEnabled="{Binding IsRunning}"/>
+    </Grid>
+  </Grid>
+</Window>
