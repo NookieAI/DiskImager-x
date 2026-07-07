@@ -1,7 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.IO.Compression;
+using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using DiskImagerX.Disk;
 using DiskImagerX.Engine;
 
 namespace DiskImagerX;
@@ -19,6 +24,8 @@ internal static class SelfTest
         Console.WriteLine("=== DiskImager.X self-test ===");
         Fat32Tests();
         ImageTests();
+        GzipParallelTests();
+        EngineRoundTripTests();
         Console.WriteLine($"=== {_pass} passed, {_fail} failed ===");
         return _fail;
     }
@@ -109,4 +116,149 @@ internal static class SelfTest
     }
 
     static byte[] ReadAll(Stream s) { using var ms = new MemoryStream(); s.CopyTo(ms); return ms.ToArray(); }
+
+    // ── parallel gzip writer ───────────────────────────────────────────────────
+    static void GzipParallelTests()
+    {
+        // 10 MiB spanning 3 members (4+4+2): compressible, zeros, random
+        var payload = new byte[10 * 1024 * 1024];
+        for (int i = 0; i < 4 << 20; i++) payload[i] = (byte)(i % 61 + 32);
+        new Random(11).NextBytes(payload.AsSpan(8 << 20));
+
+        using var gz = new MemoryStream();
+        long read = GzipParallel.Compress(new MemoryStream(payload), gz, payload.Length, _ => { }, default);
+        Eq(read, payload.Length, "pgz reads all input");
+
+        var file = gz.ToArray();
+        Ok(file[0] == 0x1F && file[1] == 0x8B, "pgz gzip magic");
+        Ok((file[3] & 4) != 0, "pgz FEXTRA flag set");
+
+        // the standard reader must decompress the multi-member stream byte-for-byte
+        using (var dec = new GZipStream(new MemoryStream(file), CompressionMode.Decompress))
+            Ok(ReadAll(dec).AsSpan().SequenceEqual(payload), "pgz multi-member round-trip");
+
+        // exact total from the FEXTRA header (trailing ISIZE only covers the last member)
+        Eq(GzipParallel.ReadSizeHeader(new MemoryStream(file)), payload.Length, "pgz FEXTRA size header");
+
+        // a foreign single-member gz has no FEXTRA -> -1
+        using var plain = new MemoryStream();
+        using (var g = new GZipStream(plain, CompressionLevel.Fastest, leaveOpen: true)) g.Write(payload, 0, 1024);
+        plain.Position = 0;
+        Eq(GzipParallel.ReadSizeHeader(plain), -1, "foreign gz: no size header");
+    }
+
+    // ── full engine round-trips through an in-memory disk ─────────────────────
+    sealed class MemBackend : Disk.IDiskBackend
+    {
+        public byte[] Data;
+        public MemBackend(byte[] data) { Data = data; }
+        public string PlatformName => "Test";
+        public string ElevationHint => "";
+        public bool IsElevated() => true;
+        public Task<IReadOnlyList<DiskInfo>> EnumerateAsync(CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<DiskInfo>>(Array.Empty<DiskInfo>());
+        public Stream OpenRead(DiskInfo d) => new MemoryStream(Data, writable: false);
+        public Stream OpenWrite(DiskInfo d) => new MemoryStream(Data, writable: true);
+        public void Rescan(DiskInfo d) { }
+        public void Eject(DiskInfo d) { }
+        public Task<string?> MountImageAsync(string p, CancellationToken ct = default) => Task.FromResult<string?>(null);
+    }
+
+    sealed class NullProgress : IProgress<ImagingProgress> { public void Report(ImagingProgress p) { } }
+
+    static void EngineRoundTripTests()
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "dix_tests");
+        Directory.CreateDirectory(dir);
+        var prog = new NullProgress();
+
+        // 12 MiB "disk": chunk0 patterned · chunk1 all-zero (smart-skip target) · chunk2 random
+        var disk = new byte[12 * 1024 * 1024];
+        for (int i = 0; i < 4 << 20; i++) disk[i] = (byte)(i % 251 + 1);
+        new Random(23).NextBytes(disk.AsSpan(8 << 20));
+        var info = new DiskInfo { Id = "mem0", DevicePath = "mem://0", Model = "MemDisk", SizeBytes = disk.Length };
+
+        // raw backup (pipelined path)
+        string rawImg = Path.Combine(dir, "e.img");
+        Imaging.Backup(new MemBackend(disk), info, rawImg, gzip: false, sha256: false, prog, default);
+        Ok(File.ReadAllBytes(rawImg).AsSpan().SequenceEqual(disk), "backup raw == disk");
+
+        // gzip backup (parallel path) + sha sidecar
+        string gzImg = Path.Combine(dir, "e.img.gz");
+        Imaging.Backup(new MemBackend(disk), info, gzImg, gzip: true, sha256: true, prog, default);
+        var opened = ImageSource.Open(gzImg);
+        Eq(opened.SizeHint, disk.Length, "gz backup size hint exact");
+        using (opened.Stream) Ok(ReadAll(opened.Stream).AsSpan().SequenceEqual(disk), "gz backup decompresses to disk");
+        string sidecar = File.ReadAllText(gzImg + ".sha256");
+        string wantHash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(gzImg))).ToLowerInvariant();
+        Ok(sidecar.StartsWith(wantHash), "sha256 sidecar matches gz file");
+
+        // full restore of the gz image onto a 0xFF-filled disk -> byte-for-byte
+        var target = new byte[disk.Length];
+        Array.Fill(target, (byte)0xFF);
+        var tb = new MemBackend(target);
+        Imaging.Restore(tb, info, gzImg, smartRestore: false, verify: false, prog, default);
+        Ok(target.AsSpan().SequenceEqual(disk), "restore full == source");
+
+        // smart restore skips the all-zero chunk (pre-fill survives there, rest matches)
+        var smart = new byte[disk.Length];
+        Array.Fill(smart, (byte)0xFF);
+        Imaging.Restore(new MemBackend(smart), info, gzImg, smartRestore: true, verify: false, prog, default);
+        Ok(smart.AsSpan(0, 4 << 20).SequenceEqual(disk.AsSpan(0, 4 << 20)), "smart restore writes data chunks");
+        Ok(smart.AsSpan(4 << 20, 4 << 20).IndexOfAnyExcept((byte)0xFF) < 0, "smart restore skips zero chunk");
+
+        // verify: passes against the matching disk; smart verify passes on the smart-restored one
+        Imaging.Verify(new MemBackend(target), info, gzImg, smartRestore: false, prog, default);
+        Ok(true, "verify full passes");
+        Imaging.Verify(new MemBackend(smart), info, gzImg, smartRestore: true, prog, default);
+        Ok(true, "verify smart passes");
+
+        // verify catches corruption
+        var corrupt = (byte[])disk.Clone();
+        corrupt[9 << 20] ^= 0x5A;
+        bool threw = false;
+        try { Imaging.Verify(new MemBackend(corrupt), info, gzImg, smartRestore: false, prog, default); }
+        catch (IOException) { threw = true; }
+        Ok(threw, "verify detects corruption");
+
+        // raw image larger than the disk is rejected up front by the size check
+        string overRaw = Path.Combine(dir, "over.img");
+        using (var f = File.Create(overRaw)) { f.Write(disk); f.Write(new byte[4096]); }
+        threw = false;
+        try { Imaging.Restore(new MemBackend(new byte[disk.Length]), info, overRaw, smartRestore: false, verify: false, prog, default); }
+        catch (IOException) { threw = true; }
+        Ok(threw, "oversize raw rejected up front");
+
+        // foreign multi-member gzip: trailing ISIZE lies (last member only), so the size check
+        // passes and the streaming tail logic must decide — zero tail tolerated, data tail aborts
+        string overZ = Path.Combine(dir, "overz.img.gz");
+        using (var f = File.Create(overZ))
+        {
+            using (var g = new GZipStream(f, CompressionLevel.Fastest, leaveOpen: true)) g.Write(disk);
+            using (var g = new GZipStream(f, CompressionLevel.Fastest, leaveOpen: true)) g.Write(new byte[4096]);
+        }
+        var t2 = new byte[disk.Length];
+        Imaging.Restore(new MemBackend(t2), info, overZ, smartRestore: false, verify: false, prog, default);
+        Ok(t2.AsSpan().SequenceEqual(disk), "oversize zero tail tolerated");
+
+        string overNz = Path.Combine(dir, "overnz.img.gz");
+        using (var f = File.Create(overNz))
+        {
+            using (var g = new GZipStream(f, CompressionLevel.Fastest, leaveOpen: true)) g.Write(disk);
+            var tail = new byte[4096]; Array.Fill(tail, (byte)0xAB);
+            using (var g = new GZipStream(f, CompressionLevel.Fastest, leaveOpen: true)) g.Write(tail);
+        }
+        threw = false;
+        try { Imaging.Restore(new MemBackend(new byte[disk.Length]), info, overNz, smartRestore: false, verify: false, prog, default); }
+        catch (IOException) { threw = true; }
+        Ok(threw, "oversize nonzero tail aborts");
+
+        // cancellation propagates
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        threw = false;
+        try { Imaging.Backup(new MemBackend(disk), info, Path.Combine(dir, "c.img"), false, false, prog, cts.Token); }
+        catch (OperationCanceledException) { threw = true; }
+        Ok(threw, "cancel propagates");
+    }
 }

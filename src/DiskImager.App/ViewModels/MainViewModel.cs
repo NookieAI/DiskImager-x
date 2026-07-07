@@ -29,7 +29,7 @@ public partial class MainViewModel : ObservableObject
         ElevationShort = IsElevated ? "admin" : "not elevated";
         var v = Assembly.GetExecutingAssembly().GetName().Version;
         VersionText = v is null ? "" : $"v{v.Major}.{v.Minor}";
-        _ = RefreshAsync();
+        RefreshCommand.Execute(null);   // via the command: its non-reentrancy guard covers the ↻ button
     }
 
     // ── header / status ───────────────────────────────────────────────────────
@@ -72,9 +72,12 @@ public partial class MainViewModel : ObservableObject
         try
         {
             var disks = await _backend.EnumerateAsync();
+            // capture BEFORE Clear(): the two-way SelectedItem binding nulls SelectedDisk when the list empties
+            var prevId = SelectedDisk?.Id; var prevSize = SelectedDisk?.SizeBytes;
             Disks.Clear();
             foreach (var d in disks) Disks.Add(d);
-            SelectedDisk = Disks.FirstOrDefault();
+            SelectedDisk = Disks.FirstOrDefault(d => d.Id == prevId && d.SizeBytes == prevSize)
+                           ?? Disks.FirstOrDefault();
             StatusText = Disks.Count == 0
                 ? (IsElevated ? "No disks detected. Connect a drive and Refresh." : $"No disks — {_backend.ElevationHint}")
                 : "Select a disk and a file, then Start.";
@@ -92,8 +95,29 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private string _volumeLabel = "";
     [ObservableProperty] private bool _quickFormat = true;
 
+    // Debounced + off-thread: File.Exists / magic-byte probes block for seconds on a dead
+    // network path, and the TextBox pushes here on every keystroke.
+    private CancellationTokenSource? _detectCts;
+
     partial void OnPathChanged(string value)
-        => FormatText = (Mode is 1 or 3) && System.IO.File.Exists(value) ? ImageSource.Detect(value) : "";
+    {
+        _detectCts?.Cancel();
+        if (Mode is not (1 or 2) || string.IsNullOrWhiteSpace(value)) { FormatText = ""; return; }
+        var cts = _detectCts = new CancellationTokenSource();
+        _ = DetectDebouncedAsync(value, cts.Token);
+    }
+
+    private async Task DetectDebouncedAsync(string value, CancellationToken ct)
+    {
+        try
+        {
+            await Task.Delay(300, ct);
+            string text = await Task.Run(() => System.IO.File.Exists(value) ? ImageSource.Detect(value) : "", ct);
+            if (!ct.IsCancellationRequested) FormatText = text;
+        }
+        catch (OperationCanceledException) { }
+        catch { if (!ct.IsCancellationRequested) FormatText = ""; }   // file vanished mid-probe
+    }
 
     [RelayCommand]
     private async Task BrowseAsync()
@@ -115,6 +139,8 @@ public partial class MainViewModel : ObservableObject
 
     private void OnProgress(ImagingProgress p)
     {
+        // keep "Cancelling…" visible: drop late throttled reports after a cancel request
+        if (_cts?.IsCancellationRequested == true && p.Phase is not (Phase.Cancelled or Phase.Error or Phase.Done)) return;
         double pct = p.Percent;
         IsIndeterminate = pct < 0 && p.Phase is Phase.Backing or Phase.Restoring or Phase.Verifying;
         ProgressPercent = pct < 0 ? 0 : pct;
@@ -127,7 +153,13 @@ public partial class MainViewModel : ObservableObject
         { IsRunning = false; PercentText = "READY"; ProgressPercent = 0; IsIndeterminate = false; }
     }
 
-    [RelayCommand] private void Cancel() => _cts?.Cancel();
+    [RelayCommand]
+    private void Cancel()
+    {
+        if (_cts is null) return;
+        StatusText = "Cancelling…";   // immediate acknowledgment; worker observes the token within ~0.5 MB
+        _cts.Cancel();
+    }
 
     [RelayCommand]
     private async Task StartAsync()
@@ -175,9 +207,15 @@ public partial class MainViewModel : ObservableObject
     private async Task MountAsync()
     {
         if (string.IsNullOrWhiteSpace(Path) || !System.IO.File.Exists(Path)) { await (Info?.Invoke("Select an image to mount.") ?? Task.CompletedTask); return; }
+        _cts = new CancellationTokenSource();   // Cancel now works during a hung mount
         IsRunning = true; StatusText = "Mounting…";
-        try { var loc = await _backend.MountImageAsync(Path); StatusText = "Mounted: " + (loc ?? "OK"); }
-        catch (Exception ex) { StatusText = "Mount error: " + ex.Message; }
-        finally { IsRunning = false; }
+        try { var loc = await _backend.MountImageAsync(Path, _cts.Token); StatusText = "Mounted: " + (loc ?? "OK"); }
+        catch (OperationCanceledException) { StatusText = "Cancelled."; }
+        catch (Exception ex)
+        {
+            // ProcUtil kills the child on cancel and surfaces a non-zero exit as IOException
+            StatusText = _cts.IsCancellationRequested ? "Cancelled." : "Mount error: " + ex.Message;
+        }
+        finally { IsRunning = false; _cts.Dispose(); _cts = null; }
     }
 }

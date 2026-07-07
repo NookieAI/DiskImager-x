@@ -1,7 +1,9 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:DiskImagerX"
+        xmlns:vm="clr-namespace:DiskImagerX.ViewModels"
         x:Class="DiskImagerX.MainWindow"
+        x:DataType="vm:MainViewModel"
         Width="620" Height="676" MinWidth="580" MinHeight="620"
         Title="DiskImager" Background="#070C16">
 
@@ -82,6 +84,11 @@
       <Setter Property="CornerRadius" Value="8"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
     </Style>
+    <Style Selector="Button.mini /template/ ContentPresenter">
+      <Setter Property="Transitions">
+        <Transitions><BrushTransition Property="Background" Duration="0:0:0.15"/></Transitions>
+      </Setter>
+    </Style>
     <Style Selector="Button.mini:pointerover /template/ ContentPresenter"><Setter Property="Background" Value="#1A3251"/></Style>
 
     <!-- inputs -->
@@ -119,6 +126,10 @@
       <Setter Property="CornerRadius" Value="7"/>
       <Setter Property="Foreground" Value="#00C6F5"/>
       <Setter Property="Background" Value="#0E1D33"/>
+      <!-- glide between engine progress reports instead of stepping -->
+      <Setter Property="Transitions">
+        <Transitions><DoubleTransition Property="Value" Duration="0:0:0.25"/></Transitions>
+      </Setter>
     </Style>
   </Window.Styles>
 
@@ -171,9 +182,13 @@
     </Border>
 
     <!-- CARD -->
-    <Border x:Name="Card" Grid.Row="2" CornerRadius="13" Background="#0B1524" BorderBrush="#1C3757" BorderThickness="1" Padding="20,18">
+    <Border x:Name="Card" Grid.Row="2" CornerRadius="13" Background="#0B1524" BorderBrush="#1C3757" BorderThickness="1" Padding="20,18"
+            RenderTransform="none">
       <Border.Transitions>
-        <Transitions><DoubleTransition Property="Opacity" Duration="0:0:0.24" Easing="CubicEaseOut"/></Transitions>
+        <Transitions>
+          <DoubleTransition Property="Opacity" Duration="0:0:0.24" Easing="CubicEaseOut"/>
+          <TransformOperationsTransition Property="RenderTransform" Duration="0:0:0.24" Easing="CubicEaseOut"/>
+        </Transitions>
       </Border.Transitions>
       <StackPanel Spacing="15">
 
@@ -226,7 +241,7 @@
     <!-- PROGRESS -->
     <StackPanel Grid.Row="3" Margin="2,16,2,10" Spacing="7">
       <Grid ColumnDefinitions="*,Auto">
-        <ProgressBar Grid.Column="0" Height="28" Minimum="0" Maximum="100" Value="{Binding ProgressPercent}"
+        <ProgressBar Grid.Column="0" Height="28" Minimum="0" Maximum="100" Value="{Binding ProgressPercent, Mode=OneWay}"
                      IsIndeterminate="{Binding IsIndeterminate}"/>
         <TextBlock Grid.Column="0" Text="{Binding PercentText}" HorizontalAlignment="Center" VerticalAlignment="Center"
                    Classes="mono" FontWeight="Bold" Foreground="#EAF3FF"/>

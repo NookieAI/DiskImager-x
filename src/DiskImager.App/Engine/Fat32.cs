@@ -39,8 +39,7 @@ public static class Fat32
 
         long totalBytes = (PART_START + RESV + 2L * fatSz + spc) * 512 + (quick ? 0 : totalData * 512);
         long done = 0; var sw = Stopwatch.StartNew(); var last = TimeSpan.Zero;
-        var zero = new byte[512];
-        var zeroChunk = new byte[1 << 20];   // 1 MiB of zeros for bulk fills
+        var zeroChunk = new byte[4 << 20];   // 4 MiB of zeros for bulk fills
 
         using var s = backend.OpenWrite(disk);   // seeks to 0; we write strictly sequentially
 

@@ -22,6 +22,7 @@ public sealed class MacBackend : IDiskBackend
     public async Task<IReadOnlyList<DiskInfo>> EnumerateAsync(CancellationToken ct = default)
     {
         var list = new List<DiskInfo>();
+        var sysTask = ResolveSystemDisksAsync(ct);   // independent of the listing — overlap it
         var listing = await ProcUtil.RunAsync("diskutil", "list -plist physical", 15000, ct).ConfigureAwait(false);
         if (!listing.Ok) return list;
         var root = PlistParser.Parse(listing.StdOut);
@@ -31,12 +32,22 @@ public sealed class MacBackend : IDiskBackend
         // AllDisksAndPartitions: per-disk dict with DeviceIdentifier + Partitions/APFSVolumes
         var all = PlistParser.GetArray(root, "AllDisksAndPartitions");
 
-        var systemDisks = await ResolveSystemDisksAsync(ct).ConfigureAwait(false);
-
+        // Fan out one `diskutil info` per disk (each spawn costs 100-400 ms; serial = seconds).
+        var ids = new List<string>();
+        var infoTasks = new List<Task<ProcUtil.Result>>();
         foreach (var w in whole)
         {
-            if (w is not string id || string.IsNullOrEmpty(id)) continue;
-            var info = await ProcUtil.RunAsync("diskutil", $"info -plist /dev/{id}", 10000, ct).ConfigureAwait(false);
+            if (w is not string wid || string.IsNullOrEmpty(wid)) continue;
+            ids.Add(wid);
+            infoTasks.Add(ProcUtil.RunAsync("diskutil", $"info -plist /dev/{wid}", 10000, ct));
+        }
+
+        var systemDisks = await sysTask.ConfigureAwait(false);
+
+        for (int i = 0; i < ids.Count; i++)
+        {
+            string id = ids[i];
+            var info = await infoTasks[i].ConfigureAwait(false);
             if (!info.Ok) continue;
             var d = PlistParser.Parse(info.StdOut);
 
@@ -147,7 +158,7 @@ public sealed class MacBackend : IDiskBackend
         string raw = $"/dev/r{disk.Id}";
         var access = write ? FileAccess.ReadWrite : FileAccess.Read;
         var handle = File.OpenHandle(raw, FileMode.Open, access, FileShare.ReadWrite, FileOptions.None);
-        return new FileStream(handle, access);
+        return new FileStream(handle, access, 1);
     }
 
     public void Rescan(DiskInfo disk) { /* macOS re-reads on remount; nothing to do */ }

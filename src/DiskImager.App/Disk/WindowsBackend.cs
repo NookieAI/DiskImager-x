@@ -31,11 +31,16 @@ public sealed class WindowsBackend : IDiskBackend
         catch { return false; }
     }
 
+    // Which physical disk hosts the OS cannot change while we run — probe the slow WMI
+    // ASSOCIATORS chain once and cache it (an empty/failed probe is retried next refresh).
+    private static HashSet<int>? _sysIdxCache;
+
     public Task<IReadOnlyList<DiskInfo>> EnumerateAsync(CancellationToken ct = default)
         => Task.Run<IReadOnlyList<DiskInfo>>(() =>
         {
             var list = new List<DiskInfo>();
-            var systemIdx = GetSystemDiskIndices();
+            var systemIdx = _sysIdxCache ?? GetSystemDiskIndices();
+            if (_sysIdxCache is null && systemIdx.Count > 0) _sysIdxCache = systemIdx;
             try
             {
                 using var q = new ManagementObjectSearcher(
@@ -98,7 +103,7 @@ public sealed class WindowsBackend : IDiskBackend
     }
 
     public Stream OpenRead(DiskInfo disk)
-        => new FileStream(OpenDevice(disk.DevicePath, GENERIC_READ, "reading"), FileAccess.Read);
+        => new FileStream(OpenDevice(disk.DevicePath, GENERIC_READ, "reading"), FileAccess.Read, 1);
 
     public Stream OpenWrite(DiskInfo disk)
     {
@@ -106,15 +111,17 @@ public sealed class WindowsBackend : IDiskBackend
         SafeFileHandle h;
         try { h = OpenDevice(disk.DevicePath, GENERIC_READ | GENERIC_WRITE, "writing"); }
         catch { foreach (var v in volHandles) v.Dispose(); throw; }
-        return new DiskWriteStream(new FileStream(h, FileAccess.ReadWrite), volHandles);
+        return new DiskWriteStream(new FileStream(h, FileAccess.ReadWrite, 1), volHandles);
     }
 
     // Open the raw device, retrying transient "device re-enumerating" errors that occur right
     // after a filesystem/partition change (format, restore) while Windows re-mounts volumes.
+    // Exponential backoff from 50 ms: the common post-format reopen clears in well under 250 ms.
     static SafeFileHandle OpenDevice(string path, uint access, string verb)
     {
-        int err = 0;
-        for (int i = 0; i < 10; i++)
+        int err = 0, delay = 50;
+        long deadline = Environment.TickCount64 + 10_000;
+        while (true)
         {
             var h = CreateFile(path, access, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
             if (!h.IsInvalid) return h;
@@ -122,41 +129,53 @@ public sealed class WindowsBackend : IDiskBackend
             h.Dispose();
             // 2 FILE_NOT_FOUND · 3 PATH_NOT_FOUND · 21 NOT_READY · 55 DEV_NOT_EXIST · 1167 DEVICE_NOT_CONNECTED
             if (err is not (2 or 3 or 21 or 55 or 1167)) break;   // non-transient (e.g. 5 ACCESS_DENIED): fail now
-            Thread.Sleep(250 + i * 250);
+            if (Environment.TickCount64 >= deadline) break;
+            Thread.Sleep(delay);
+            delay = Math.Min(delay * 2, 2000);
         }
         throw new IOException($"Cannot open {path} for {verb} (error {err}).");
     }
 
-    /// <summary>Lock + dismount every volume on this physical disk so raw writes are allowed.</summary>
+    /// <summary>Lock + dismount every volume on this physical disk so raw writes are allowed.
+    /// Enumerates mount-manager volume GUIDs (not drive letters), so letterless volumes —
+    /// EFI system partitions, folder mount points — are locked too.</summary>
     private static List<SafeFileHandle> LockVolumes(DiskInfo disk)
     {
         var handles = new List<SafeFileHandle>();
         int diskIndex = ParseIndex(disk.Id);
-        for (char c = 'A'; c <= 'Z'; c++)
+        var name = new System.Text.StringBuilder(260);
+        IntPtr find = FindFirstVolume(name, (uint)name.Capacity);
+        if (find == INVALID_HANDLE_VALUE) return handles;
+        try
         {
-            var hv = CreateFile($@"\\.\{c}:", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-            if (hv.IsInvalid) { hv.Dispose(); continue; }
-
-            bool onOurDisk = false;
-            IntPtr ext = Marshal.AllocHGlobal(512);
-            try
+            do
             {
-                if (DeviceIoControl(hv, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, IntPtr.Zero, 0, ext, 512, out _, IntPtr.Zero))
-                {
-                    int count = Marshal.ReadInt32(ext, 0);
-                    if (count > 0 && 8 + count * 24 <= 512)
-                        for (int i = 0; i < count; i++)
-                            if (Marshal.ReadInt32(ext, 8 + i * 24) == diskIndex) { onOurDisk = true; break; }
-                }
-            }
-            finally { Marshal.FreeHGlobal(ext); }
+                string volPath = name.ToString().TrimEnd('\\');   // \\?\Volume{guid}
+                var hv = CreateFile(volPath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+                if (hv.IsInvalid) { hv.Dispose(); continue; }   // BitLocker-locked / inaccessible: skip
 
-            if (!onOurDisk) { hv.Dispose(); continue; }
-            DeviceIoControl(hv, FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
-            DeviceIoControl(hv, FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
-            handles.Add(hv);
+                bool onOurDisk = false;
+                IntPtr ext = Marshal.AllocHGlobal(512);
+                try
+                {
+                    if (DeviceIoControl(hv, IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, IntPtr.Zero, 0, ext, 512, out _, IntPtr.Zero))
+                    {
+                        int count = Marshal.ReadInt32(ext, 0);
+                        if (count > 0 && 8 + count * 24 <= 512)
+                            for (int i = 0; i < count; i++)
+                                if (Marshal.ReadInt32(ext, 8 + i * 24) == diskIndex) { onOurDisk = true; break; }
+                    }
+                }
+                finally { Marshal.FreeHGlobal(ext); }
+
+                if (!onOurDisk) { hv.Dispose(); continue; }
+                DeviceIoControl(hv, FSCTL_LOCK_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                DeviceIoControl(hv, FSCTL_DISMOUNT_VOLUME, IntPtr.Zero, 0, IntPtr.Zero, 0, out _, IntPtr.Zero);
+                handles.Add(hv);
+            } while (FindNextVolume(find, name, (uint)name.Capacity));
         }
+        finally { FindVolumeClose(find); }
         return handles;
     }
 
@@ -213,7 +232,9 @@ public sealed class WindowsBackend : IDiskBackend
         public override bool CanWrite => _inner.CanWrite;
         public override long Length => _inner.Length;
         public override long Position { get => _inner.Position; set => _inner.Position = value; }
-        public override void Flush() => _inner.Flush();
+        // Flush(true) → FlushFileBuffers: the device's write cache is drained before the engine
+        // reports Done / starts verify-after-write. Throws on real write failure — intended.
+        public override void Flush() => _inner.Flush(true);
         public override int Read(byte[] b, int o, int c) => _inner.Read(b, o, c);
         public override long Seek(long o, SeekOrigin r) => _inner.Seek(o, r);
         public override void SetLength(long v) => _inner.SetLength(v);
@@ -228,6 +249,7 @@ public sealed class WindowsBackend : IDiskBackend
     // ── P/Invoke ────────────────────────────────────────────────────────────
     const uint GENERIC_READ = 0x80000000, GENERIC_WRITE = 0x40000000;
     const uint FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2, OPEN_EXISTING = 3;
+    static readonly IntPtr INVALID_HANDLE_VALUE = new(-1);
     const uint IOCTL_DISK_UPDATE_PROPERTIES = 0x00070140;
     const uint IOCTL_STORAGE_EJECT_MEDIA = 0x002D4808;
     const uint IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS = 0x00560000;
@@ -241,4 +263,15 @@ public sealed class WindowsBackend : IDiskBackend
     [return: MarshalAs(UnmanagedType.Bool)]
     static extern bool DeviceIoControl(SafeFileHandle h, uint code, IntPtr inBuf, uint inSz,
         IntPtr outBuf, uint outSz, out uint returned, IntPtr overlapped);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr FindFirstVolume(System.Text.StringBuilder name, uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool FindNextVolume(IntPtr h, System.Text.StringBuilder name, uint length);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    static extern bool FindVolumeClose(IntPtr h);
 }

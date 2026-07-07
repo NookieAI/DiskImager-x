@@ -1,7 +1,12 @@
 name: Build and release
 
 # Push a version tag to build standalone single-file binaries for every OS and
-# attach them to the GitHub release:  git tag v3.0 && git push origin v3.0
+# attach them to the GitHub release:  git tag v3.1 && git push origin v3.1
+#
+# Per-OS matrix: ReadyToRun (fast cold start) must be compiled on a matching host.
+# macOS needs IncludeAllContentForSelfExtract — with only IncludeNativeLibrariesForSelfExtract
+# the SDK leaves libAvaloniaNative/libSkiaSharp/libHarfBuzzSharp OUTSIDE the single file,
+# which crashes the bare binary on launch.
 on:
   push:
     tags: ['v*']
@@ -12,7 +17,16 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            rids: 'win-x64'
+          - os: ubuntu-latest
+            rids: 'linux-x64'
+          - os: macos-latest
+            rids: 'osx-x64 osx-arm64'
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,20 +34,64 @@ jobs:
         with:
           dotnet-version: '7.0.x'
 
-      - name: Publish standalone single-file binaries (all OSes)
+      - name: Publish (single-file, self-contained, ReadyToRun)
+        shell: bash
         run: |
           cd src/DiskImager.App
-          for rid in win-x64 linux-x64 osx-x64 osx-arm64; do
+          for rid in ${{ matrix.rids }}; do
             echo "== publishing $rid =="
+            extra=""
+            case "$rid" in
+              osx-*) extra="-p:IncludeAllContentForSelfExtract=true" ;;
+              *)     extra="-p:IncludeNativeLibrariesForSelfExtract=true" ;;
+            esac
             dotnet publish -c Release -r $rid --self-contained true \
-              -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true \
+              -p:PublishSingleFile=true -p:PublishReadyToRun=true $extra \
               -p:EnableCompressionInSingleFile=true -p:DebugType=none \
               -o "$GITHUB_WORKSPACE/out/$rid"
+            # fail the build if any native library escaped the single file
+            leftovers=$(find "$GITHUB_WORKSPACE/out/$rid" -name '*.dylib' -o -name '*.so' -o -name '*.dll' | grep -v 'DiskImager' || true)
+            if [ -n "$leftovers" ]; then echo "loose native libs: $leftovers"; exit 1; fi
           done
+
+      - name: Gate on selftest (published binary)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          # GUI-subsystem exe: & does not wait — Start-Process does
+          $p = Start-Process "$env:GITHUB_WORKSPACE/out/win-x64/DiskImager.exe" -ArgumentList '--selftest' -Wait -PassThru -NoNewWindow
+          exit $p.ExitCode
+
+      - name: Gate on selftest (published binary, linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          chmod +x "$GITHUB_WORKSPACE/out/linux-x64/DiskImager"
+          "$GITHUB_WORKSPACE/out/linux-x64/DiskImager" --selftest
+
+      - name: Gate on selftest (published binary, macos)
+        if: matrix.os == 'macos-latest'
+        run: |
+          rid=osx-x64; [ "$(uname -m)" = "arm64" ] && rid=osx-arm64
+          chmod +x "$GITHUB_WORKSPACE/out/$rid/DiskImager"
+          "$GITHUB_WORKSPACE/out/$rid/DiskImager" --selftest
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.os }}
+          path: out/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
 
       - name: Collect + checksum
         run: |
-          cd "$GITHUB_WORKSPACE/out"
+          cd out
           mv win-x64/DiskImager.exe   DiskImager-windows-x64.exe
           mv linux-x64/DiskImager     DiskImager-linux-x64
           mv osx-x64/DiskImager       DiskImager-macos-x64

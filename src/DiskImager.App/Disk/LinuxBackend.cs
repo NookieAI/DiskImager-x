@@ -96,8 +96,12 @@ public sealed class LinuxBackend : IDiskBackend
     private static Stream Open(DiskInfo disk, bool write)
     {
         var access = write ? FileAccess.ReadWrite : FileAccess.Read;
-        var handle = File.OpenHandle(disk.DevicePath, FileMode.Open, access, FileShare.ReadWrite, FileOptions.None);
-        return new FileStream(handle, access);
+        // Reads: fadvise sequential for kernel read-ahead. Writes: O_SYNC — /dev/sdX is
+        // page-cached, so without it progress runs at RAM speed and "Done" can appear
+        // while gigabytes are still dirty in RAM (unsafe to unplug).
+        var opts = write ? FileOptions.WriteThrough : FileOptions.SequentialScan;
+        var handle = File.OpenHandle(disk.DevicePath, FileMode.Open, access, FileShare.ReadWrite, opts);
+        return new FileStream(handle, access, 1);
     }
 
     public void Rescan(DiskInfo disk)

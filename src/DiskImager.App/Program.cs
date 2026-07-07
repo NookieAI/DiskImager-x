@@ -25,8 +25,14 @@ internal static class Program
             int mode = shot + 2 < args.Length && int.TryParse(args[shot + 2], out var mm) ? mm : 0;
             RenderShot(args[shot + 1], mode); return;
         }
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
+        RunGui(args);
     }
+
+    // Isolated + NoInlining so JITting Main doesn't load (and, in compressed single-file
+    // builds, decompress) the Avalonia assemblies on the --selftest / --list / --e2e paths.
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static void RunGui(string[] args)
+        => BuildAvaloniaApp().StartWithClassicDesktopLifetime(args);
 
     // Offscreen render of the main window to a PNG (no visible window) — for UI review.
     private static void RenderShot(string outPath, int mode)
@@ -39,11 +45,16 @@ internal static class Program
         win.Show();
         Dispatcher.UIThread.RunJobs();
         for (int i = 0; i < 6; i++) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(40); }
-        // switch mode on the live, shown window, then let the fade settle
+        // switch mode on the live, shown window, then force-tick the headless render timer so
+        // the card fade + tab brush transitions actually advance to their final values
         if (win.DataContext is ViewModels.MainViewModel vm) vm.Mode = mode;
-        for (int i = 0; i < 12; i++) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(40); }
-        if (win.FindControl<Avalonia.Controls.Border>("Card") is { } card) card.Opacity = 1;
-        for (int i = 0; i < 4; i++) { Dispatcher.UIThread.RunJobs(); System.Threading.Thread.Sleep(40); }
+        for (int i = 0; i < 12; i++)
+        {
+            Dispatcher.UIThread.RunJobs();
+            System.Threading.Thread.Sleep(40);
+            AvaloniaHeadlessPlatform.ForceRenderTimerTick();
+            Dispatcher.UIThread.RunJobs();
+        }
         var frame = win.CaptureRenderedFrame();
         frame?.Save(outPath);
         Console.WriteLine(frame is null ? "no frame" : "saved " + outPath);

@@ -13,8 +13,14 @@ internal static class ProcUtil
         public bool Ok => ExitCode == 0;
     }
 
-    public static async Task<Result> RunAsync(string file, string args, int timeoutMs = 30000,
+    // Hop to the thread pool before p.Start(): process spawn (fork/exec, AV scans) otherwise
+    // runs on the caller's thread — which can be the Avalonia UI thread (Mount click, first scan).
+    public static Task<Result> RunAsync(string file, string args, int timeoutMs = 30000,
         CancellationToken ct = default)
+        => Task.Run(() => RunCoreAsync(file, args, timeoutMs, ct), CancellationToken.None);
+
+    static async Task<Result> RunCoreAsync(string file, string args, int timeoutMs,
+        CancellationToken ct)
     {
         var psi = new ProcessStartInfo(file, args)
         {

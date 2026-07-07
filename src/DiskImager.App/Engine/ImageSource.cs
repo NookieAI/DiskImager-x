@@ -40,7 +40,7 @@ public static class ImageSource
 
         if (m[0] == 0x1F && m[1] == 0x8B)
         {
-            var fs = File.OpenRead(path);
+            var fs = OpenSequential(path);
             try { return new Opened(new GZipStream(fs, CompressionMode.Decompress), GzipSize(path), "gzip"); }
             catch { fs.Dispose(); throw; }
         }
@@ -59,13 +59,17 @@ public static class ImageSource
             long len = new FileInfo(path).Length;
             long data = len - 512;
             if (data <= 0) throw new InvalidDataException("VHD too small.");
-            var fs = File.OpenRead(path);
+            var fs = OpenSequential(path);
             return new Opened(new LimitedStream(fs, data), data, "vhd");
         }
 
-        var raw = File.OpenRead(path);
+        var raw = OpenSequential(path);
         return new Opened(raw, raw.Length, ext == ".iso" ? "iso" : "raw");
     }
+
+    // Sequential-read hint + 1 MiB buffer: measurably faster bulk reads, esp. over networks.
+    static FileStream OpenSequential(string path)
+        => new(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20, FileOptions.SequentialScan);
 
     static long GzipSize(string path)
     {
@@ -73,6 +77,12 @@ public static class ImageSource
         {
             using var f = File.OpenRead(path);
             if (f.Length < 18) return -1;
+
+            // Our own backups stamp the exact total in the first member's FEXTRA field
+            // (works for any size, incl. multi-member parallel-gzip files).
+            long di = GzipParallel.ReadSizeHeader(f);
+            if (di > 0) return di;
+
             if (f.Length > 0xFFFFFFFFL) return -1;   // ISIZE is 32-bit; unreliable for >4 GB inputs
             f.Seek(-4, SeekOrigin.End);
             Span<byte> b = stackalloc byte[4];
