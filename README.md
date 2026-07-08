@@ -4,6 +4,9 @@
 
 # DiskImager-X — Advanced Image Suite
 
+[![Latest Release](https://img.shields.io/github/v/release/NookieAI/DiskImager-x?label=latest&color=2ea44f)](https://github.com/NookieAI/DiskImager-x/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/NookieAI/DiskImager-x/total?color=2ea44f)](https://github.com/NookieAI/DiskImager-x/releases)
+
 Standalone disk imaging utility for **Windows, macOS, and Linux**.  
 Backup · Restore · Verify · FAT32 Format · Mount — no installer, single executable.
 
